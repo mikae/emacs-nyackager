@@ -98,8 +98,8 @@
                         (plist-get sub 'name)
                         "manifest.nyaifest"))
 
-(defun nyackager--manifest-priority (sub)
-  "Return manifest priority."
+(defun nyackager--subscription-priority (sub)
+  "Return subscription priority."
   (plist-get sub 'priority))
 
 (defun nyackager-update-tree ()
@@ -108,12 +108,10 @@
   (nyackager--touch-file nyackager-lock-file)
 
   (dolist (--sub (nyackager-get-subscriptions))
-    (let ((--repo              (plist-get --sub 'repo))
-          (--manifest-destination nil))
+    (let ((--repo              (plist-get --sub 'repo)))
       (cond
        ((eq --repo
             'github)
-        (setq --manifest-destination (nyackager--manifest-destination --sub))
         (nyackager--download-repo-github --sub))))))
 
 (defun nyackager--execute-recipe (repo-name recipe-name recipe-version)
@@ -180,8 +178,10 @@
     (add-to-list 'load-path --result-directory)))
 
 (defun nyackager--select-latest-version (versions)
-  "Select latest version."
-  (or (cl-find "last" versions :test #'equal)
+  "Select latest version of VERSIONS
+`versions' is the list of strings.
+If string `\"latest\"' in the `versions', then it would be returned."
+  (or (cl-find "latest" versions :test #'equal)
       (cl-reduce (lambda (acc item)
                    (if (nyackager--version->= acc item)
                        acc
@@ -193,29 +193,44 @@
 It will fetch data, compile, and install it into target directory."
   ;; todo add error checking
   (nyackager--chain (nyackager-get-subscriptions)
+                    ;; parse repository file structure
                     (cl-mapcar (lambda (sub)
-                                 (list (nyackager--manifest-priority sub)
-                                       (nyackager--chain sub
-                                                         (nyackager--manifest-destination)
-                                                         (nyackager--read-sexps)))))
+                                 (let* ((--repo-name (plist-get sub 'name))
+                                        (--repo-path (nyackager--path-join nyackager-recipe-directory
+                                                                           --repo-name)))
+                                   (list (nyackager--subscription-priority sub)
+                                         (nyackager--chain (nyackager--subdirectories --repo-path :both)
+                                                           (cl-mapcar (lambda (lst)
+                                                                        (list :name     (cadr lst)
+                                                                              :versions (nyackager--chain (nyackager--subfiles (car lst) :relative)
+                                                                                                          (cl-mapcar (lambda (filename)
+                                                                                                                       (file-name-base filename))))))))
+                                         --repo-name))))
+                    ;; remove repos that doesn't have target recipe
                     (cl-remove-if-not (lambda (item)
                                         (nyackager--chain item
                                                           (nth 1)
-                                                          (assoc 'packages)
-                                                          (cdr)
                                                           (cl-mapcar (lambda (recipe-form)
                                                                        (equal (cl-getf recipe-form :name)
                                                                               recipe-name)))
                                                           (cl-reduce (lambda (acc has)
                                                                        (or acc has))))))
+                    ;; sort by priority
                     (cl-sort _ (lambda (item)
                                  (nth 0 item)))
+                    ;; take the most prioritized repo
                     (car)
-                    (nth 1)
-                    (funcall (lambda (item)
-                               (let* ((repo-name (cadr (assoc 'name item)))
-                                      (versions (cl-getf (cadr (assoc 'packages item))
-                                                         :versions))
+                    ;; get rid of priority
+                    (cdr)
+                    ;; execute recipe
+                    (funcall (lambda (lst)
+                               (let* ((item      (car lst))
+                                      (repo-name (cadr lst))
+                                      (recipe    (cl-find-if (lambda (--recipe)
+                                                               (equal (cl-getf --recipe :name)
+                                                                      recipe-name))
+                                                             item))
+                                      (versions  (cl-getf recipe :versions))
                                       (target-version (or recipe-version
                                                           (nyackager--select-latest-version versions))))
                                  (nyackager--execute-recipe repo-name
@@ -224,6 +239,7 @@ It will fetch data, compile, and install it into target directory."
                                  (list repo-name
                                        recipe-name
                                        target-version))))
+                    ;; update lock file
                     (funcall (lambda (lst)
                                (cl-destructuring-bind (repo-name recipe-name recipe-version) lst
                                  (nyackager--chain (nyackager--load-lock-file)

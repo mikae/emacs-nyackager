@@ -32,6 +32,8 @@
 ;;
 ;;; Code:
 
+(require 'cl-lib)
+
 (defun nyackager--path-join (&rest args)
   (cl-reduce (lambda (acc it)
                (concat (file-name-as-directory acc)
@@ -116,6 +118,47 @@ If no placeholder is used, result is added to the end of the form."
              (file-accessible-directory-p (file-name-directory filepath)))
     (with-temp-buffer
       (write-file filepath))))
+
+(defun nyackager--dir-subitems (dirpath filter-func what)
+  "Return content of directory DIRPATH filtered by FILTER-FUNC.
+If `filter-func' returns t, then item would be deleted.
+`filter-func' has one parameter - list (item-full-path item-name)."
+  (nyackager--chain (directory-files dirpath)
+                    (cl-mapcar (lambda (filename)
+                                 (list (nyackager--path-join dirpath
+                                                             filename)
+                                       filename)))
+                    (cl-remove-if filter-func)
+                    (cl-mapcar (lambda (lst)
+                                 (cond
+                                  ((eq what
+                                       :both)
+                                   lst)
+                                  ((eq what
+                                       :absolute)
+                                   (car lst))
+                                  ;; ((eq what
+                                  ;;      :relative)
+                                  ;;  (cadr lst))
+                                  (t
+                                   (cadr lst)))))))
+
+(defun nyackager--subdirectories (dirpath &optional what)
+  "Return the list of subdirectories."
+  (nyackager--dir-subitems dirpath
+                           (lambda (lst)
+                             (or (not (file-accessible-directory-p (car lst)))
+                                 (cl-find (cadr lst)
+                                          (list "." ".." ".git")
+                                          :test #'equal)))
+                           what))
+
+(defun nyackager--subfiles (dirpath &optional what)
+  "Return the list of files in directory.."
+  (nyackager--dir-subitems dirpath
+                           (lambda (lst)
+                             (file-accessible-directory-p (car lst)))
+                           what))
 
 (defun nyackager--recipe-dependencies-p (recipe-dependencies)
   "Return t, if dependencies are correct list"
